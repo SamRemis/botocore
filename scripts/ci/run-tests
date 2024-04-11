@@ -36,7 +36,7 @@ def process_args(args):
         test_args += "-n auto --dist=loadfile --maxprocesses=4 "
     if args.with_cov:
         test_args += f"--cov={PACKAGE} --cov-report xml "
-    if args.junitxml:
+    if args.junitxmlfile:
         test_args += f"--junitxml={args.junitxmlfile} "
     if args.marker:
         test_args += f"-m {args.marker} "
