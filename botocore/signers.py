@@ -74,10 +74,12 @@ class RequestSigner:
         credentials,
         event_emitter,
         auth_token=None,
+        auth=None,
     ):
         self._region_name = region_name
         self._signing_name = signing_name
         self._signature_version = signature_version
+        self._auth = auth
         self._credentials = credentials
         self._auth_token = auth_token
         self._service_id = service_id
@@ -92,6 +94,10 @@ class RequestSigner:
     @property
     def signature_version(self):
         return self._signature_version
+
+    @property
+    def auth_types(self):
+        return self._auth
 
     @property
     def signing_name(self):
@@ -220,7 +226,9 @@ class RequestSigner:
 
         # operation specific signing context takes precedent over client-level
         # defaults
-        signature_version = context.get('auth_type') or self._signature_version
+        # TODO uncomment this, delete line after; how do we handle resolved EP2.0 versions?
+        #  signature_version = context.get('auth_type') or self._resolve_auth_version()
+        signature_version = self._resolve_auth_version()
         signing = context.get('signing', {})
         signing_name = signing.get('signing_name', self._signing_name)
         region_name = signing.get('region', self._region_name)
@@ -251,6 +259,25 @@ class RequestSigner:
                 signature_version += suffix
 
         return signature_version
+
+    def _resolve_auth_version(self):
+        if not self._auth:
+            return self._signature_version
+        for auth in self._auth:
+            signature_version = botocore.auth.AUTH_TYPE_TO_SIGNATURE_VERSION.get(auth)
+            if not signature_version:
+                raise UnknownSignatureVersionError(
+                    signature_version=auth
+                )
+            signer_class = botocore.auth.AUTH_TYPE_MAPS.get(signature_version)
+            if signer_class:
+                if signer_class.REQUIRES_TOKEN and not self._auth_token:
+                    continue
+                if signer_class.REQUIRES_CREDENTIALS and not self._credentials:
+                    continue
+                return signature_version
+        #TODO improve this error message
+        raise ValueError(f"No auth versions for this service are supported by this version of botocore.  One of the following are required: {', '.join(self._auth)}")
 
     def get_auth_instance(
         self,

@@ -627,6 +627,15 @@ class OperationModel:
         return self._operation_model.get('authtype')
 
     @CachedProperty
+    def auth(self):
+        return self._operation_model.get('auth')
+
+    @CachedProperty
+    def unsigned_payload(self):
+        return self._operation_model.get('unsignedPayload')
+
+
+    @CachedProperty
     def error_shapes(self):
         shapes = self._operation_model.get("errors", [])
         return list(self._service_model.resolve_shape_ref(s) for s in shapes)

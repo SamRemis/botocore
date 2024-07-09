@@ -102,6 +102,7 @@ def _get_body_as_dict(request):
 class BaseSigner:
     REQUIRES_REGION = False
     REQUIRES_TOKEN = False
+    REQUIRES_CREDENTIALS = True
 
     def add_auth(self, request):
         raise NotImplementedError("add_auth")
@@ -109,6 +110,7 @@ class BaseSigner:
 
 class TokenSigner(BaseSigner):
     REQUIRES_TOKEN = True
+    REQUIRES_CREDENTIALS = False
     """
     Signers that expect an authorization token to perform the authorization
     """
@@ -1144,6 +1146,12 @@ AUTH_TYPE_MAPS = {
     'v4-s3express-query': S3ExpressQueryAuth,
     'v4-s3express-presign-post': S3ExpressPostAuth,
     'bearer': BearerAuth,
+}
+
+AUTH_TYPE_TO_SIGNATURE_VERSION = {
+    'aws.auth#sigv4':'v4',
+    'aws.auth#sigv4a': 'v4a',
+    'smithy.api#httpBearerAuth': 'bearer',
 }
 
 # Define v4 signers depending on if CRT is present

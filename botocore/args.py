@@ -128,6 +128,7 @@ class ClientArgsCreator:
             credentials,
             event_emitter,
             auth_token,
+            service_model.metadata.get('auth')
         )
 
         config_kwargs['s3'] = s3_config
@@ -265,6 +266,9 @@ class ClientArgsCreator:
                 ),
                 disable_request_compression=(
                     client_config.disable_request_compression
+                ),
+                sigv4a_signing_region_set=(
+                    client_config.sigv4a_signing_region_set
                 ),
                 client_context_params=client_config.client_context_params,
             )

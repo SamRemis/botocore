@@ -50,7 +50,7 @@ from botocore.endpoint_provider import VALID_HOST_LABEL_RE
 from botocore.exceptions import (
     AliasConflictParameterError,
     ParamValidationError,
-    UnsupportedTLSVersionWarning,
+    UnsupportedTLSVersionWarning, UnknownSignatureVersionError,
 )
 from botocore.regions import EndpointResolverBuiltins
 from botocore.signers import (
@@ -188,8 +188,7 @@ def set_operation_specific_signer(context, signing_name, **kwargs):
     authenticated at all, but can include other auth modes such as sigv4
     without body signing.
     """
-    auth_type = context.get('auth_type')
-
+    auth_type = _resolve_auth_type(context)
     # Auth type will be None if the operation doesn't have a configured auth
     # type.
     if not auth_type:
@@ -210,7 +209,11 @@ def set_operation_specific_signer(context, signing_name, **kwargs):
         if auth_type == 'v4a':
             # If sigv4a is chosen, we must add additional signing config for
             # global signature.
-            signing = {'region': '*', 'signing_name': signing_name}
+            signing = {
+                #TODO write a test for this;
+                'region': context['client_config'].sigv4a_signing_region_set or context['signing']['region'] or '*',
+                'signing_name': signing_name
+            }
             if 'signing' in context:
                 context['signing'].update(signing)
             else:
@@ -221,7 +224,7 @@ def set_operation_specific_signer(context, signing_name, **kwargs):
 
         # If the operation needs an unsigned body, we set additional context
         # allowing the signer to be aware of this.
-        if auth_type == 'v4-unsigned-body':
+        if context.get('unsigned_payload') or auth_type == 'v4-unsigned-body':
             context['payload_signing_enabled'] = False
 
         # Signing names used by s3 and s3-control use customized signers "s3v4"
@@ -230,6 +233,32 @@ def set_operation_specific_signer(context, signing_name, **kwargs):
             signature_version = f's3{signature_version}'
 
         return signature_version
+
+
+def _resolve_auth_type(context):
+    # Try to resolve the auth type from the given list
+    auth = context.get('auth')
+    if auth:
+        for auth_type in auth:
+            if auth_type == 'smithy.api#noAuth':
+                return 'none'
+            elif auth_type in botocore.auth.AUTH_TYPE_TO_SIGNATURE_VERSION:
+                signature_version = botocore.auth.AUTH_TYPE_TO_SIGNATURE_VERSION[auth_type]
+                if signature_version in botocore.auth.AUTH_TYPE_MAPS:
+                    # signer_class = botocore.auth.AUTH_TYPE_MAPS.get(signature_version)
+                    # if signer_class:
+                    #     if signer_class.REQUIRES_TOKEN and not self._auth_token:
+                    #         continue
+                    #     if signer_class.REQUIRES_CREDENTIALS and not self._credentials:
+                    #         continue
+                    #     return signature_version
+                    return signature_version
+            else:
+                raise UnknownSignatureVersionError(
+                    signature_version=auth
+                )
+    # Fall back to the legacy 'auth_type' variable if 'auth' is not available
+    return context.get('auth_type')
 
 
 def decode_console_output(parsed, **kwargs):

@@ -157,6 +157,7 @@ class ClientCreator:
             service_signature_version=service_model.metadata.get(
                 'signatureVersion'
             ),
+            service_auth=service_model.metadata.get('auth'),
         )
         client_args = self._get_client_args(
             service_model,
@@ -487,7 +488,7 @@ class ClientCreator:
             return
 
         if signature_version.startswith('v4-s3express'):
-            return f'{signature_version}'
+            return signature_version
 
         for suffix in ['-query', '-presign-post']:
             if signature_version.endswith(suffix):
@@ -603,6 +604,7 @@ class ClientEndpointBridge:
         service_signing_name=None,
         config_store=None,
         service_signature_version=None,
+        service_auth=None
     ):
         self.service_signing_name = service_signing_name
         self.endpoint_resolver = endpoint_resolver
@@ -611,6 +613,7 @@ class ClientEndpointBridge:
         self.default_endpoint = default_endpoint or self.DEFAULT_ENDPOINT
         self.config_store = config_store
         self.service_signature_version = service_signature_version
+        self.service_auth = service_auth
 
     def resolve(
         self, service_name, region_name=None, endpoint_url=None, is_secure=True
@@ -954,6 +957,8 @@ class BaseClient:
             'client_config': self.meta.config,
             'has_streaming_input': operation_model.has_streaming_input,
             'auth_type': operation_model.auth_type,
+            'auth': operation_model.auth,
+            'unsigned_payload': operation_model.unsigned_payload,
         }
         api_params = self._emit_api_params(
             api_params=api_params,
