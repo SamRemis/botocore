@@ -1144,7 +1144,6 @@ class S3Parser(RestXMLParser):
 
 PROTOCOL_PARSERS = {
     'ec2': EC2QueryParser,
-    's3': S3Parser,
     'query': QueryParser,
     'json': JSONParser,
     'rest-json': RestJSONParser,

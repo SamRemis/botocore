@@ -595,6 +595,23 @@ def parse_get_bucket_location(parsed, http_response, **kwargs):
     region = root.text
     parsed['LocationConstraint'] = region
 
+def handle_expires_header(response, operation_model, **kwargs):
+    if output_shape := operation_model.output_shape:
+        if 'Expires' in output_shape.members:
+            expires_member = output_shape.members['Expires']
+            if expires_member.name == 'Expires':
+                expires_string_member = copy.deepcopy(expires_member)
+                expires_string_member.type_name = 'string'
+                expires_string_member.name = 'ExpiresString'
+                output_shape.members['ExpiresString'] = expires_string_member
+                try:
+                    utils.parse_timestamp(response.headers.get('Expires'))
+                except (ValueError, RuntimeError):
+                    del output_shape.members['Expires']
+                    #TODO log a warning here
+
+
+
 
 def document_s3_expires_shape(section, event_name, **kwargs):
     # Updates the documentation for S3 operations that include the 'Expires' member
@@ -1237,6 +1254,7 @@ BUILTIN_HANDLERS = [
     ('after-call.ec2.GetConsoleOutput', decode_console_output),
     ('after-call.cloudformation.GetTemplate', json_decode_template_body),
     ('after-call.s3.GetBucketLocation', parse_get_bucket_location),
+    ('before-parse.s3.*', handle_expires_header),
     ('before-parameter-build', generate_idempotent_uuid),
     ('before-parameter-build.s3', validate_bucket_name),
     ('before-parameter-build.s3', remove_bucket_from_url_paths_from_model),

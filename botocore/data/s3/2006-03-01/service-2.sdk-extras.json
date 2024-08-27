@@ -1,12 +1,9 @@
 {
   "version": 1.0,
   "merge": {
-    "metadata":{
-      "protocol":"s3",
-      "protocols":["s3"]
-    },
     "shapes": {
-      "Expires":{"type":"timestamp"}
+      "Expires":{"type":"timestamp"},
+      "ExpiresString":{"type":"string"}
     }
   }
 }

@@ -11,7 +11,7 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-
+import copy
 import datetime
 import logging
 import os
@@ -271,12 +271,17 @@ class Endpoint:
                     'body': request.body,
                 },
             )
+            operation_model = copy.deepcopy(operation_model)
             service_id = operation_model.service_model.service_id.hyphenize()
             event_name = f"before-send.{service_id}.{operation_model.name}"
             responses = self._event_emitter.emit(event_name, request=request)
             http_response = first_non_none_response(responses)
             if http_response is None:
                 http_response = self._send(request)
+            self._event_emitter.emit(
+                f"before-parse.{service_id}.{operation_model.name}",
+                **{'response': http_response, 'operation_model': operation_model}
+            )
         except HTTPClientError as e:
             return (None, e)
         except Exception as e:
