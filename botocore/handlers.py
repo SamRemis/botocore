@@ -52,6 +52,7 @@ from botocore.exceptions import (
     ParamValidationError,
     UnsupportedTLSVersionWarning,
 )
+from botocore.model import Shape, StringShape
 from botocore.regions import EndpointResolverBuiltins
 from botocore.signers import (
     add_generate_db_auth_token,
@@ -600,13 +601,14 @@ def handle_expires_header(response, operation_model, **kwargs):
         if 'Expires' in output_shape.members:
             expires_member = output_shape.members['Expires']
             if expires_member.name == 'Expires':
-                expires_string_member = copy.deepcopy(expires_member)
-                expires_string_member.type_name = 'string'
-                expires_string_member.name = 'ExpiresString'
-                output_shape.members['ExpiresString'] = expires_string_member
+                output_shape.members['ExpiresString'] = StringShape('ExpiresString', {
+                    'type': 'string',
+                    'name': 'ExpiresString'
+                })
                 try:
                     utils.parse_timestamp(response.headers.get('Expires'))
                 except (ValueError, RuntimeError):
+                    #prevent 'Expires' from being parsed if it'll fail
                     del output_shape.members['Expires']
                     #TODO log a warning here
 

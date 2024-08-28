@@ -271,7 +271,6 @@ class Endpoint:
                     'body': request.body,
                 },
             )
-            operation_model = copy.deepcopy(operation_model)
             service_id = operation_model.service_model.service_id.hyphenize()
             event_name = f"before-send.{service_id}.{operation_model.name}"
             responses = self._event_emitter.emit(event_name, request=request)

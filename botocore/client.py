@@ -10,6 +10,7 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
+import copy
 import logging
 
 from botocore import waiter, xform_name
@@ -939,7 +940,8 @@ class BaseClient:
         return self.meta.service_model
 
     def _make_api_call(self, operation_name, api_params):
-        operation_model = self._service_model.operation_model(operation_name)
+        operation_model = copy.deepcopy(self._service_model.operation_model(
+            operation_name))
         service_name = self._service_model.service_name
         history_recorder.record(
             'API_CALL',
