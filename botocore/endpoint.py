@@ -239,22 +239,12 @@ class Endpoint:
         success_response, exception = self._do_get_response(
             request, operation_model, context
         )
-        response_dict = {}
         service_id = operation_model.service_model.service_id.hyphenize()
-        if not exception:
-            self._event_emitter.emit(
-                f"before-parse.{service_id}.{operation_model.name}",
-                **{
-                    "success_response": success_response,
-                    "operation_model": operation_model,
-                    "response_dict": response_dict
-                }
-            )
         kwargs_to_emit = {
-            'response_dict': response_dict,
             'parsed_response': None,
             'context': context,
             'exception': exception,
+            'success_response': success_response,
         }
         if success_response is not None:
             http_response, parsed_response = success_response
@@ -312,10 +302,19 @@ class Endpoint:
         history_recorder.record('HTTP_RESPONSE', http_response_record_dict)
 
         protocol = operation_model.metadata['protocol']
+        additional_keys = {}
+        self._event_emitter.emit(
+            f"before-parse.{service_id}.{operation_model.name}",
+            **{
+                "response_dict": response_dict,
+                "additional_keys": additional_keys
+            }
+        )
         parser = self._response_parser_factory.create_parser(protocol)
         parsed_response = parser.parse(
             response_dict, operation_model.output_shape
         )
+        parsed_response.update(additional_keys)
         # Do a second parsing pass to pick up on any modeled error fields
         # NOTE: Ideally, we would push this down into the parser classes but
         # they currently have no reference to the operation or service model
