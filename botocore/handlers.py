@@ -52,6 +52,7 @@ from botocore.exceptions import (
     ParamValidationError,
     UnsupportedTLSVersionWarning,
 )
+from botocore.model import Shape, StringShape
 from botocore.regions import EndpointResolverBuiltins
 from botocore.signers import (
     add_generate_db_auth_token,
@@ -595,6 +596,17 @@ def parse_get_bucket_location(parsed, http_response, **kwargs):
     region = root.text
     parsed['LocationConstraint'] = region
 
+def handle_expires_header(success_response, operation_model, response_dict, **kwargs):
+    if expires_value := success_response[0].headers.get('Expires'):
+        response_dict['ExpiresString'] = expires_value
+        try:
+            response_dict['Expires'] = utils.parse_timestamp(expires_value)
+        except (ValueError, RuntimeError):
+            # prevent 'Expires' from being parsed if it'll fail
+            del success_response[0].headers['Expires']
+
+
+
 
 def document_s3_expires_shape(section, event_name, **kwargs):
     # Updates the documentation for S3 operations that include the 'Expires' member
@@ -615,22 +627,17 @@ def document_s3_expires_shape(section, event_name, **kwargs):
         if not section.has_section('Expires'):
             return
         param_section = section.get_section('Expires')
-        # Add a deprecation notice for the "Expires" param
         doc_section = param_section.get_section('param-documentation')
-        doc_section.style.start_note()
         doc_section.write(
-            'This member has been deprecated. Please use ``ExpiresString`` instead.'
+            '*This member has been deprecated*. Please use ``ExpiresString`` instead.'
         )
-        doc_section.style.end_note()
-        # Document the "ExpiresString" param
-        new_param_section = param_section.add_new_section('ExpiresString')
-        new_param_section.style.new_paragraph()
-        new_param_section.write('- **ExpiresString** *(string) --*')
-        new_param_section.style.indent()
-        new_param_section.style.new_paragraph()
-        new_param_section.write(
-            'The raw, unparsed value of the ``Expires`` field.'
-        )
+        param_section.add_new_section('ExpiresString')
+        new_param = param_section.get_section('ExpiresString')
+        new_param.style.start_li()
+        new_param.write('**ExpiresString** (*string*) --')
+        new_param.style.end_li()
+        new_param.style.new_line()
+        new_param.write('\tThe raw, unparsed value of the ``Expires`` field.')
 
 
 def base64_encode_user_data(params, **kwargs):
@@ -1242,6 +1249,7 @@ BUILTIN_HANDLERS = [
     ('after-call.ec2.GetConsoleOutput', decode_console_output),
     ('after-call.cloudformation.GetTemplate', json_decode_template_body),
     ('after-call.s3.GetBucketLocation', parse_get_bucket_location),
+    ('before-parse.s3.*', handle_expires_header),
     ('before-parameter-build', generate_idempotent_uuid),
     ('before-parameter-build.s3', validate_bucket_name),
     ('before-parameter-build.s3', remove_bucket_from_url_paths_from_model),
