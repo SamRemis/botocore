@@ -239,12 +239,10 @@ class Endpoint:
         success_response, exception = self._do_get_response(
             request, operation_model, context
         )
-        service_id = operation_model.service_model.service_id.hyphenize()
         kwargs_to_emit = {
             'parsed_response': None,
             'context': context,
             'exception': exception,
-            'success_response': success_response,
         }
         if success_response is not None:
             http_response, parsed_response = success_response
@@ -252,6 +250,7 @@ class Endpoint:
             kwargs_to_emit['response_dict'] = convert_to_response_dict(
                 http_response, operation_model
             )
+        service_id = operation_model.service_model.service_id.hyphenize()
         self._event_emitter.emit(
             f"response-received.{service_id}.{operation_model.name}",
             **kwargs_to_emit,
