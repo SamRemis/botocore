@@ -240,6 +240,7 @@ class Endpoint:
             request, operation_model, context
         )
         kwargs_to_emit = {
+            'response_dict': None,
             'parsed_response': None,
             'context': context,
             'exception': exception,
