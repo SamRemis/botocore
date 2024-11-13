@@ -42,7 +42,7 @@ from botocore.utils import (
 logger = logging.getLogger(__name__)
 
 TEMPLATE_STRING_RE = re.compile(r"\{[a-zA-Z#]+\}")
-GET_ATTR_RE = re.compile(r"(\w+)\[(\d+)\]")
+GET_ATTR_RE = re.compile(r"(\w*)\[(\d+)\]")
 VALID_HOST_LABEL_RE = re.compile(
     r"^(?!-)[a-zA-Z\d-]{1,63}(?<!-)$",
 )
@@ -178,7 +178,8 @@ class RuleSetStandardLibrary:
             if match is not None:
                 name, index = match.groups()
                 index = int(index)
-                value = value.get(name)
+                if name:
+                    value = value.get(name)
                 if value is None or index >= len(value):
                     return None
                 return value[index]
@@ -576,6 +577,7 @@ class ParameterType(Enum):
 
     string = str
     boolean = bool
+    stringarray = tuple
 
 
 class ParameterDefinition:
