@@ -43,6 +43,8 @@ import calendar
 import datetime
 import json
 import re
+import struct
+import time
 from xml.etree import ElementTree
 
 from botocore import validate
@@ -54,7 +56,6 @@ from botocore.utils import (
     parse_to_aware_datetime,
     percent_encode,
 )
-
 # From the spec, the default timestamp format if not specified is iso8601.
 DEFAULT_TIMESTAMP_FORMAT = 'iso8601'
 ISO8601 = '%Y-%m-%dT%H:%M:%SZ'
@@ -801,6 +802,420 @@ class RestXMLSerializer(BaseRestSerializer):
         node = ElementTree.SubElement(xmlnode, name)
         node.text = str(params)
 
+    # class RpcCBORSerializer:
+    #     MAJOR_TYPE_UNSIGNED_INT = 0x00  # 000_00000 - Major Type 0 - unsigned int
+    #     MAJOR_TYPE_NEGATIVE_INT = 0x20  # 001_00000 - Major Type 1 - negative int
+    #     MAJOR_TYPE_BYTE_STR = 0x40  # 010_00000 - Major Type 2 (Byte String)
+    #     MAJOR_TYPE_STR = 0x60  # 011_00000 - Major Type 3 (Text String)
+    #     MAJOR_TYPE_ARRAY = 0x80  # 100_00000 - Major Type 4 (Array)
+    #     MAJOR_TYPE_MAP = 0xa0  # 101_00000 - Major Type 5 (Map)
+    #     MAJOR_TYPE_TAG = 0xc0  # 110_00000 - Major type 6 (Tag)
+    #     MAJOR_TYPE_SIMPLE = 0xe0  # 111_00000 - Major type 7 (111) + 5 bit 0
+
+class CBORSerializer(Serializer):
+    MAJOR_TYPE_UNSIGNED_INT = 0x00  # 000_00000 - Major Type 0 - unsigned int
+    MAJOR_TYPE_NEGATIVE_INT = 0x20  # 001_00000 - Major Type 1 - negative int
+    MAJOR_TYPE_BYTE_STR = 0x40  # 010_00000 - Major Type 2 (Byte String)
+    MAJOR_TYPE_STR = 0x60  # 011_00000 - Major Type 3 (Text String)
+    MAJOR_TYPE_ARRAY = 0x80  # 100_00000 - Major Type 4 (Array)
+    MAJOR_TYPE_MAP = b'0xa0'  # 101_00000 - Major Type 5 (Map)
+    MAJOR_TYPE_TAG = 0xc0  # 110_00000 - Major type 6 (Tag)
+    MAJOR_TYPE_SIMPLE = 0xe0  # 111_00000 - Major type 7 (111) + 5 bit 0
+
+    def __init__(self):
+        self._time_spent = 0
+        self._type_to_method = {
+            'int': self._serialize_type_int,
+            'float': self._serialize_type_float,
+            'string': self._serialize_type_string,
+            'array': self._serialize_type_array,
+            'map': self._serialize_type_map,
+            'structure': self._serialize_type_structure,
+        }
+
+    def serialize_to_request(self, parameters, operation_model):
+        serialized = self._create_default_request()
+        serialized['method'] = 'POST'  # CBOR
+        serialized['headers'] = {
+            'smithy-protocol': 'rpc-v2-cbor',
+            'Content-Type': 'application/cbor', #TODO this MUST go in only if we
+            # serialize a body
+        }
+        service_name = operation_model.service_model.metadata['targetPrefix']
+        operation_name = operation_model.name
+        serialized['url_path'] = f'/service/{service_name}/operation/{operation_name}'
+        body = bytearray()
+        input_shape = operation_model.input_shape
+        if input_shape is not None:
+            self._serialize_data_item(body, parameters, input_shape)
+            serialized['body'] = body
+        print(f"{self._time_spent:.10f}")
+        return serialized
+
+    def _serialize_data_item(self, serialized, value, shape, key=None):
+        start_time = time.time()
+        method = self._type_to_method.get(shape.type_name, self._default_serialize)
+        end_time = time.time()
+        self._time_spent += (end_time - start_time)
+        if key is not None:
+            print(key)
+        method(serialized, value, shape, key)
+
+
+    def _serialize_type_int(self, serialized, value, shape, key):
+        if value >= 0:
+            if value < 24:
+                serialized.extend(bytes([value]))
+            elif value < 256:
+                serialized.extend(b'\x18' + value.to_bytes(1, "big"))
+            elif value < 65536:
+                serialized.extend(b'\x19' + value.to_bytes(2, "big"))
+            elif value < 4294967296:
+                serialized.extend(b'\x1a' + value.to_bytes(4, "big"))
+            else:
+                serialized.extend(b'\x1b' + value.to_bytes(8, "big"))
+        else:
+            value = -1 - value
+            if value < 24:
+                serialized.extend(bytes([0x20 + value]))
+            elif value < 256:
+                serialized.extend(b'\x38' + value.to_bytes(1, "big"))
+            elif value < 65536:
+                serialized.extend(b'\x39' + value.to_bytes(2, "big"))
+            elif value < 4294967296:
+                serialized.extend(b'\x3a' + value.to_bytes(4, "big"))
+            else:
+                serialized.extend(b'\x3b' + value.to_bytes(8, "big"))
+
+    def _serialize_type_float(self, serialized, value, shape, key):
+        # Serialize float as double-precision (major type 7, additional information 27)
+        serialized.extend(b'\xfb' + struct.pack(">d", value))
+
+    def _serialize_type_string(self, serialized, value, shape, key):
+        encoded = value.encode('utf-8')
+        length = len(encoded)
+        if length < 24:
+            serialized.extend(bytes([0x60 + length]) + encoded)
+        elif length < 256:
+            serialized.extend(b'\x78' + length.to_bytes(1, 'big') + encoded)
+        elif length < 65536:
+            serialized.extend(b'\x79' + length.to_bytes(2, 'big') + encoded)
+        elif length < 4294967296:
+            serialized.extend(b'\x7a' + length.to_bytes(4, 'big') + encoded)
+        else:
+            serialized.extend(b'\x7b' + length.to_bytes(8, 'big') + encoded)
+
+
+    def _serialize_type_structure(self, serialized, value, shape, key):
+        if key is not None:
+            # For nested structures, we need to serialize the key first
+            self._serialize_data_item(serialized, key, shape.key_shape)
+        # Start the map serialization
+        members = shape.members
+        map_length = len(value)
+        if map_length < 24:
+            serialized.extend(struct.pack('B', 0xa0 + map_length))
+        elif map_length < 256:
+            serialized.extend(b'\xb8' + struct.pack('B', map_length))
+        elif map_length < 65536:
+            serialized.extend(b'\xb9' + struct.pack('>H', map_length))
+        elif map_length < 4294967296:
+            serialized.extend(b'\xba' + struct.pack('>I', map_length))
+        else:
+            serialized.extend(b'\xbb' + struct.pack('>Q', map_length))
+        for member_key, member_value in value.items():
+            member_shape = members[member_key]
+            if 'name' in member_shape.serialization:
+                member_key = member_shape.serialization['name']
+            self._serialize_type_string(serialized, member_key, None, None)
+            self._serialize_data_item(serialized, member_value, member_shape)
+
+    def _serialize_type_array(self, serialized, value, shape, key):
+        length = len(value)
+        if length < 24:
+            serialized.extend(struct.pack('B', 0x80 + length))
+        elif length < 256:
+            serialized.extend(b'\x98' + struct.pack('B', length))
+        elif length < 65536:
+            serialized.extend(b'\x99' + struct.pack('>H', length))
+        elif length < 4294967296:
+            serialized.extend(b'\x9a' + struct.pack('>I', length))
+        else:
+            serialized.extend(b'\x9b' + struct.pack('>Q', length))
+        for item in value:
+            self._serialize_data_item(serialized, item, shape.member)
+
+    def _serialize_type_map(self, serialized, value, shape, key):
+        length = len(value)
+        if length < 24:
+            serialized.extend(struct.pack('B', 0xa0 + length))
+        elif length < 256:
+            serialized.extend(b'\xb8' + struct.pack('B', length))
+        elif length < 65536:
+            serialized.extend(b'\xb9' + struct.pack('>H', length))
+        elif length < 4294967296:
+            serialized.extend(b'\xba' + struct.pack('>I', length))
+        else:
+            serialized.extend(b'\xbb' + struct.pack('>Q', length))
+        for key_item, item in value.items():
+            self._serialize_data_item(serialized, key_item, shape.key)
+            self._serialize_data_item(serialized, item, shape.value)
+
+    def _default_serialize(self, serialized, value, shape, key):
+        # Default serialization (e.g., fallback to string serialization)
+        encoded = str(value).encode('utf-8')
+        length = len(encoded)
+        if length < 24:
+            serialized.extend(bytes([0x60 + length]) + encoded)
+        elif length < 256:
+            serialized.extend(b'\x78' + length.to_bytes(1, 'big') + encoded)
+        elif length < 65536:
+            serialized.extend(b'\x79' + length.to_bytes(2, 'big') + encoded)
+        elif length < 4294967296:
+            serialized.extend(b'\x7a' + length.to_bytes(4, 'big') + encoded)
+        else:
+            serialized.extend(b'\x7b' + length.to_bytes(8, 'big') + encoded)
+    #
+    # def _serialize(self, data):
+    #     if data is None:
+    #         return b'\xf6'  # CBOR null
+    #     elif isinstance(data, bool):
+    #         return b'\xf5' if data else b'\xf4'  # CBOR true/false
+    #     elif isinstance(data, int):
+    #         return self._serialize_int(data)
+    #     elif isinstance(data, float):
+    #         return self._serialize_float(data)
+    #     elif isinstance(data, str):
+    #         return self._serialize_string(data)
+    #     elif isinstance(data, list):
+    #         return self._serialize_array(data)
+    #     elif isinstance(data, dict):
+    #         return self._serialize_map(data)
+    #     else:
+    #         raise TypeError(f"Unsupported type: {type(data)}")
+    #
+    # def _serialize_int(self, value):
+    #     if value >= 0:
+    #         if value < 24:
+    #             return bytes([value])
+    #         elif value < 256:
+    #             return b'\x18' + value.to_bytes(1, "big")
+    #         elif value < 65536:
+    #             return b'\x19' + value.to_bytes(2, "big")
+    #         elif value < 4294967296:
+    #             return b'\x1a' + value.to_bytes(4, "big")
+    #         else:
+    #             return b'\x1b' + value.to_bytes(8, "big")
+    #     else:
+    #         value = -1 - value
+    #         if value < 24:
+    #             return bytes([0x20 + value])
+    #         elif value < 256:
+    #             return b'\x38' + value.to_bytes(1, "big")
+    #         elif value < 65536:
+    #             return b'\x39' + value.to_bytes(2, "big")
+    #         elif value < 4294967296:
+    #             return b'\x3a' + value.to_bytes(4, "big")
+    #         else:
+    #             return b'\x3b' + value.to_bytes(8, "big")
+    #
+    # def _serialize_float(self, value):
+    #     import struct
+    #     # Serialize float as double-precision (major type 7, additional information 27)
+    #     return b'\xfb' + struct.pack(">d", value)
+    #
+    # def _serialize_string(self, value):
+    #     #TODO separate this out
+    #     encoded = value.encode('utf-8')
+    #     length = len(encoded)
+    #     78
+    #     if length < 24:
+    #         return bytes([0x60 + length]) + encoded
+    #     elif length < 256:
+    #         return b'\x78' + length.to_bytes(1, 'big') + encoded
+    #     elif length < 65536:
+    #         return b'\x79' + length.to_bytes(2, 'big') + encoded
+    #     elif length < 4294967296:
+    #         return b'\x7a' + length.to_bytes(4, 'big') + encoded
+    #     else:
+    #         return b'\x7b' + length.to_bytes(8, 'big') + encoded
+    #
+    # def _serialize_array(self, value):
+    #     length = len(value)
+    #     result = bytearray()
+    #     if length < 24:
+    #         result.extend(struct.pack('B', 0x80 + length))
+    #     elif length < 256:
+    #         result.extend(b'\x98' + struct.pack('B', length))
+    #     elif length < 65536:
+    #         result.extend(b'\x99' + struct.pack('>H', length))
+    #     elif length < 4294967296:
+    #         result.extend(b'\x9a' + struct.pack('>I', length))
+    #     else:
+    #         result.extend(b'\x9b' + struct.pack('>Q', length))
+    #     for item in value:
+    #         result.extend(self._serialize(item))
+    #     return result
+    #
+    # def _serialize_map(self, value):
+    #     length = len(value)
+    #     result = bytearray()
+    #     if length < 24:
+    #         result.extend(struct.pack('B', 0xa0 + length))
+    #     elif length < 256:
+    #         result.extend(b'\xb8' + struct.pack('B', length))
+    #     elif length < 65536:
+    #         result.extend(b'\xb9' + struct.pack('>H', length))
+    #     elif length < 4294967296:
+    #         result.extend(b'\xba' + struct.pack('>I', length))
+    #     else:
+    #         result.extend(b'\xbb' + struct.pack('>Q', length))
+    #     for key, item in value.items():
+    #         result.extend(self._serialize(key))
+    #         result.extend(self._serialize(item))
+    #     return result
+
+
+from awscrt.cbor import AwsCborEncoder
+class CRTCBORSerializer(Serializer):
+
+    def serialize_to_request(self, parameters, operation_model):
+        serialized = self._create_default_request()
+        serialized['method'] = operation_model.http.get(
+            'method', self.DEFAULT_METHOD
+        )
+        serialized['headers'] = {
+            'smithy-protocol': 'rpc-v2-cbor',
+            'Content-Type': f'application/cbor',
+        }
+        service_name = operation_model.service_model.metadata['targetPrefix']
+        operation_name = operation_model.name
+        serialized['url_path'] = f'/service/{service_name}/operation/{operation_name}'
+        input_shape = operation_model.input_shape
+        if input_shape is not None:
+            serialized['body'] = self._serialize(parameters)
+        return serialized
+
+    def _serialize(self, data):
+        cbor_encoder = AwsCborEncoder()
+        cbor_encoder.write_data_item(data)
+        return cbor_encoder.get_encoded_data()
+
+
+class CborSerializer2:
+
+    def __init__(self):
+        self.bytesarr = bytearray()
+
+    def serialize_to_request(self, parameters, operation_model):
+        serialized = self._create_default_request()
+        serialized['method'] = 'POST'  # CBOR
+        serialized['headers'] = {
+            'smithy-protocol': 'rpc-v2-cbor',
+            'Content-Type': 'application/cbor',  # TODO this MUST go in only if we
+            # serialize a body
+        }
+        service_name = operation_model.service_model.metadata['targetPrefix']
+        operation_name = operation_model.name
+        serialized['url_path'] = f'/service/{service_name}/operation/{operation_name}'
+        input_shape = operation_model.input_shape
+        self.bytesarr.clear()
+        if input_shape is not None:
+            self._serialize(parameters)
+            serialized['body'] = self.bytesarr
+        return serialized
+
+    def _serialize(self, data):
+        if data is None:
+            self.bytesarr.extend(b'\xf6')  # CBOR null
+        elif isinstance(data, bool):
+            self.bytesarr.extend(b'\xf5' if data else b'\xf4')  # CBOR true/false
+        elif isinstance(data, int):
+            self._serialize_int(data)
+        elif isinstance(data, float):
+            self._serialize_float(data)
+        elif isinstance(data, str):
+            self._serialize_string(data)
+        elif isinstance(data, list):
+            self._serialize_array(data)
+        elif isinstance(data, dict):
+            self._serialize_map(data)
+        else:
+            raise TypeError(f"Unsupported type: {type(data)}")
+
+    def _serialize_int(self, value):
+        if value >= 0:
+            if value < 24:
+                self.bytesarr.extend(bytes([value]))
+            elif value < 256:
+                self.bytesarr.extend(b'\x18' + value.to_bytes(1, "big"))
+            elif value < 65536:
+                self.bytesarr.extend(b'\x19' + value.to_bytes(2, "big"))
+            elif value < 4294967296:
+                self.bytesarr.extend(b'\x1a' + value.to_bytes(4, "big"))
+            else:
+                self.bytesarr.extend(b'\x1b' + value.to_bytes(8, "big"))
+        else:
+            value = -1 - value
+            if value < 24:
+                self.bytesarr.extend(bytes([0x20 + value]))
+            elif value < 256:
+                self.bytesarr.extend(b'\x38' + value.to_bytes(1, "big"))
+            elif value < 65536:
+                self.bytesarr.extend(b'\x39' + value.to_bytes(2, "big"))
+            elif value < 4294967296:
+                self.bytesarr.extend(b'\x3a' + value.to_bytes(4, "big"))
+            else:
+                self.bytesarr.extend(b'\x3b' + value.to_bytes(8, "big"))
+
+    def _serialize_float(self, value):
+        # Serialize float as double-precision (major type 7, additional information 27)
+        self.bytesarr.extend(b'\xfb' + struct.pack(">d", value))
+
+    def _serialize_string(self, value):
+        encoded = value.encode('utf-8')
+        length = len(encoded)
+        if length < 24:
+            self.bytesarr.extend(bytes([0x60 + length]) + encoded)
+        elif length < 256:
+            self.bytesarr.extend(b'\x78' + length.to_bytes(1, 'big') + encoded)
+        elif length < 65536:
+            self.bytesarr.extend(b'\x79' + length.to_bytes(2, 'big') + encoded)
+        elif length < 4294967296:
+            self.bytesarr.extend(b'\x7a' + length.to_bytes(4, 'big') + encoded)
+        else:
+            self.bytesarr.extend(b'\x7b' + length.to_bytes(8, 'big') + encoded)
+
+    def _serialize_array(self, value):
+        length = len(value)
+        if length < 24:
+            self.bytesarr.extend(struct.pack('B', 0x80 + length))
+        elif length < 256:
+            self.bytesarr.extend(b'\x98' + struct.pack('B', length))
+        elif length < 65536:
+            self.bytesarr.extend(b'\x99' + struct.pack('>H', length))
+        elif length < 4294967296:
+            self.bytesarr.extend(b'\x9a' + struct.pack('>I', length))
+        else:
+            self.bytesarr.extend(b'\x9b' + struct.pack('>Q', length))
+        for item in value:
+            self._serialize(item)
+
+    def _serialize_map(self, value):
+        length = len(value)
+        if length < 24:
+            self.bytesarr.extend(struct.pack('B', 0xa0 + length))
+        elif length < 256:
+            self.bytesarr.extend(b'\xb8' + struct.pack('B', length))
+        elif length < 65536:
+            self.bytesarr.extend(b'\xb9' + struct.pack('>H', length))
+        elif length < 4294967296:
+            self.bytesarr.extend(b'\xba' + struct.pack('>I', length))
+        else:
+            self.bytesarr.extend(b'\xbb' + struct.pack('>Q', length))
+        for key, item in value.items():
+            self._serialize(key)
+            self._serialize(item)
 
 SERIALIZERS = {
     'ec2': EC2Serializer,
@@ -808,4 +1223,7 @@ SERIALIZERS = {
     'json': JSONSerializer,
     'rest-json': RestJSONSerializer,
     'rest-xml': RestXMLSerializer,
+    'smithy-rpc-v2-cbor': CBORSerializer,
+    'memoryview': CBORSerializer,
+    'crtcbor': CRTCBORSerializer,
 }
